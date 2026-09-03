@@ -1,9 +1,11 @@
 import os
+import json
 import threading
 import queue
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs, unquote
 
 PORT = int(os.environ.get("PORT", 8080))
 _running = False
@@ -57,17 +59,45 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"ok")
             return
 
-        # /upload and /run - support ?stream=1 for raw SSE
+        # /upload and /run - support ?stream=1 for raw SSE and custom query overrides
         if self.path == "/upload" or self.path == "/run" or self.path.startswith("/upload?") or self.path.startswith("/run?"):
+            # parse query overrides for custom run without recommit: ?src=accounts&account=@a,@b&cover=cover/2.jpg etc
+            query = {}
+            if "?" in self.path:
+                try:
+                    qs = parse_qs(urlparse(self.path).query)
+                    # flatten: take first value, keep list for account
+                    for k, v in qs.items():
+                        if k == "stream":
+                            continue
+                        # handle comma-separated and multiple values
+                        vals = []
+                        for val in v:
+                            # split on comma and also handle @ prefix
+                            for part in val.split(","):
+                                part = unquote(part).strip()
+                                if part:
+                                    vals.append(part)
+                        query[k] = vals if len(vals) > 1 else (vals[0] if vals else "")
+                    # special: account param may be like ?account=@xyz&account=@abcd or ?account=@xyz,@abcd or ?account=@xyz@{abcd} (legacy)
+                    if "account" in query:
+                        # already handled
+                        pass
+                    # also support ?src=reels, ?src=accounts, ?src=feed
+                    # also support ?cover=cover/2.jpg, ?caption_mode=custom etc
+                    if query:
+                        BroadcastHandler.emit(f"Query override: {query}")
+                except Exception as e:
+                    BroadcastHandler.emit(f"Query parse error: {e}")
             if "stream=1" in self.path or "text/event-stream" in self.headers.get("Accept", ""):
                 if not _running:
-                    threading.Thread(target=_run_job, daemon=True).start()
+                    threading.Thread(target=_run_job, args=(query,), daemon=True).start()
                     time.sleep(0.5)
                 self._stream_logs()
                 return
             # browser HTML with live EventSource
             if not _running:
-                threading.Thread(target=_run_job, daemon=True).start()
+                threading.Thread(target=_run_job, args=(query,), daemon=True).start()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
@@ -162,10 +192,27 @@ es.onerror=()=>{es.close()};
 
     def do_POST(self):
         global _running
+        # parse query for POST as well
+        query = {}
+        if "?" in self.path:
+            try:
+                qs = parse_qs(urlparse(self.path).query)
+                for k, v in qs.items():
+                    if k == "stream":
+                        continue
+                    vals = []
+                    for val in v:
+                        for part in val.split(","):
+                            part = unquote(part).strip()
+                            if part:
+                                vals.append(part)
+                    query[k] = vals if len(vals) > 1 else (vals[0] if vals else "")
+            except Exception:
+                pass
         if self.path in ("/upload", "/run") or self.path.startswith("/upload?") or self.path.startswith("/run?"):
             if "stream=1" in self.path:
                 if not _running:
-                    threading.Thread(target=_run_job, daemon=True).start()
+                    threading.Thread(target=_run_job, args=(query,), daemon=True).start()
                     time.sleep(0.5)
                 self._stream_logs()
                 return
@@ -180,9 +227,15 @@ es.onerror=()=>{es.close()};
     def log_message(self, format, *args):
         pass
 
-def _run_job():
+def _run_job(query: dict | None = None):
     global _running
     _running = True
+    if query:
+        BroadcastHandler.emit(f"Query override: {query}")
+        try:
+            os.environ["CONFIG_OVERRIDE"] = json.dumps(query)
+        except Exception:
+            pass
     BroadcastHandler.emit("=== Upload job started ===")
     BroadcastHandler.emit(f"Config: {PROJECT_ROOT / 'config.json'}")
     os.environ["FROM_APP"] = "1"
@@ -191,7 +244,7 @@ def _run_job():
         from main import main
         import sys
         sys.argv = ["main.py"]
-        BroadcastHandler.emit("Calling main() - fetching feed...")
+        BroadcastHandler.emit(f"Calling main() - fetching feed... src={query.get('src') if query else 'config'}")
         ret = main()
         BroadcastHandler.emit(f"main() returned {ret}")
         BroadcastHandler.emit("=== Upload job finished ===")

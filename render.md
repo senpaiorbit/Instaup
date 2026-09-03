@@ -47,11 +47,17 @@ git push origin main
   "custom_hashtags": [],
   "enable_dedup": true,          // false = allow repeats
   "dedup_file": "data/uploaded.db",
-  "cover_path": "cover/1.jpg",   // file or folder
+  "cover_path": "cover",         // file or folder (random from cover/ if folder)
   "log_file": "data/logs/bot.log",
-  "log_level": "INFO"
+  "log_level": "INFO",
+  "min_likes": 50000,            // filter: like_count >= 50k (0 = disabled)
+  "min_comments": 1000,           // comment_count >= 1k
+  "min_shares": 500,              // reshare_count >= 500
+  "min_views": 100000,            // play_count >= 100k (reels views)
+  "max_age_hours": 24             // taken_at within 24h (today)
 }
 ```
+Filters are **AND** — reel must pass all set filters (0 = disabled). Checks `like_count`, `comment_count`/`preview_comments`, `reshare_count`/`share_count`, `play_count`/`view_count`, `taken_at`.
 
 **Source modes:**
 - `feed` — your home timeline (personalized, may be ad-heavy → auto fallback to `clips/discover`)
@@ -75,14 +81,40 @@ git push origin main
 - `GET /logs` → last 200 lines of `data/logs/bot.log`
 - `GET /logs/stream` → SSE live tail
 
-**Trigger upload:**
+**Trigger upload (without recommit) — query overrides:**
 ```bash
-curl https://instaup-ayp2.onrender.com/upload
-# or stream
-curl -N https://instaup-ayp2.onrender.com/upload?stream=1
-# or keep alive
+# use feed (your timeline)
+curl https://instaup-ayp2.onrender.com/upload?src=feed
+
+# use reels discovery
+curl https://instaup-ayp2.onrender.com/upload?src=reels
+
+# use accounts - random account from list (no recommit)
+curl "https://instaup-ayp2.onrender.com/upload?src=accounts&account=@natgeo,@nike"
+curl "https://instaup-ayp2.onrender.com/upload?src=accounts&account=@instagram&account=@nike"
+# also supports: ?account=@xyz (single), ?account=@xyz,@abcd (comma), ?accounts=@a,@b
+
+# custom cover per request
+curl "https://instaup-ayp2.onrender.com/upload?cover=cover/2.jpg"
+curl "https://instaup-ayp2.onrender.com/upload?cover=cover"  # random from cover/
+
+# other overrides (any config.json key)
+curl "https://instaup-ayp2.onrender.com/upload?caption_mode=custom&custom_hashtags=viral,trending"
+curl "https://instaup-ayp2.onrender.com/upload?enable_dedup=false"
+curl "https://instaup-ayp2.onrender.com/upload?src=accounts&account=@your_niche&cover=cover/3.png&enable_dedup=true"
+
+# engagement filters (upload only if passes)
+curl "https://instaup-ayp2.onrender.com/upload?src=feed&min_likes=50000&max_age_hours=24"
+curl "https://instaup-ayp2.onrender.com/upload?src=accounts&account=@natgeo&min_likes=50000&min_comments=1000&min_shares=500&min_views=100000&max_age_hours=24"
+curl "https://instaup-ayp2.onrender.com/upload?min_likes=100000&min_comments=5000"  # any source
+
+# stream live log
+curl -N "https://instaup-ayp2.onrender.com/upload?src=accounts&account=@natgeo&stream=1"
+
+# keep alive
 curl https://instaup-ayp2.onrender.com/health
 ```
+All query keys override `config.json` without `git push` — `src` alias for `source`, `account` alias for `accounts`, `cover` alias for `cover_path`.
 
 Keep free service from sleeping: set **UptimeRobot** to hit `/health` every 5 min and hit `/upload` on schedule.
 

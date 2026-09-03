@@ -10,5 +10,10 @@
     "dedup_file": "data/uploaded.json",
     "cover_path": "cover",
     "log_file": "data/logs/bot.log",
-    "log_level": "INFO"
+    "log_level": "INFO",
+    "min_likes": 50000,
+    "min_comments": 1000,
+    "min_shares": 500,
+    "min_views": 100000,
+    "max_age_hours": 24
 }

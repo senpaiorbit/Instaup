@@ -58,7 +58,62 @@ def main():
         print("Config file not found or empty")
         return 1
 
+    # apply query overrides from /upload?src=...&account=... without recommit (via CONFIG_OVERRIDE env)
+    override_raw = os.environ.get("CONFIG_OVERRIDE")
+    if override_raw:
+        try:
+            import json as _json
+            over = _json.loads(override_raw)
+            if isinstance(over, dict):
+                # normalize aliases: src -> source, account -> accounts
+                if "src" in over and "source" not in over:
+                    over["source"] = over.pop("src")
+                if "account" in over and "accounts" not in over:
+                    # account may be string or list
+                    acc = over.pop("account")
+                    over["accounts"] = acc if isinstance(acc, list) else [acc]
+                if "accounts" in over and isinstance(over["accounts"], str):
+                    over["accounts"] = [over["accounts"]]
+                # cover alias
+                if "cover" in over and "cover_path" not in over:
+                    over["cover_path"] = over.pop("cover")
+                # type coercion for query strings (all come as strings from URL)
+                for k in list(over.keys()):
+                    v = over[k]
+                    if isinstance(v, str):
+                        low = v.lower()
+                        if low in ("true", "false"):
+                            over[k] = low == "true"
+                        elif k in ("max_reels_per_run", "max_reels", "min_likes", "min_comments", "min_shares", "min_reposts", "min_views"):
+                            try:
+                                over[k] = int(v)
+                            except Exception:
+                                pass
+                        elif k in ("delay_min", "delay_max", "max_age_hours"):
+                            try:
+                                over[k] = float(v)
+                            except Exception:
+                                pass
+                        elif k == "custom_hashtags":
+                            over[k] = [x.strip().lstrip("#") for x in v.split(",") if x.strip()]
+                        elif k == "accounts" and "," in v:
+                            over[k] = [x.strip() for x in v.split(",") if x.strip()]
+                config.update(over)
+                # if accounts override given, force source to accounts
+                if "accounts" in over:
+                    config["source"] = "accounts"
+        except Exception as e:
+            print(f"Invalid CONFIG_OVERRIDE: {e}")
+        finally:
+            os.environ.pop("CONFIG_OVERRIDE", None)
+
     logger = setup_logger(config.get("log_file", "data/logs/bot.log"), config.get("log_level", "INFO"))
+    # log effective config for live view
+    try:
+        filt = {k: config.get(k) for k in ("min_likes","min_comments","min_shares","min_views","max_age_hours") if config.get(k)}
+        logger.info(f"Effective config: source={config.get('source')} accounts={config.get('accounts') or config.get('accounts_file')} cover={config.get('cover_path')} filters={filt if filt else 'none'}")
+    except Exception:
+        pass
 
     if os.environ.get("RENDER"):
         _start_healthcheck()
