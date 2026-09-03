@@ -2,7 +2,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-ROOT = Path("/mnt/sdcard/htdocs/instabot")
+ROOT = Path(__file__).resolve().parent.parent
 
 # Connection cache only (no full-set cache to avoid OOM on 10k+ ids)
 _conns: dict[str, sqlite3.Connection] = {}
