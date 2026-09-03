@@ -1,6 +1,6 @@
 --prefer-binary
 instagrapi==2.18.18
-requests==2.32.3
+requests==2.34.2
 Pillow==11.3.0
 imageio-ffmpeg==0.6.0
 moviepy==2.2.1
