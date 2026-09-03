@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: instabot
+    runtime: python
+    plan: free
+    region: oregon
+    env: python
+    buildCommand: pip install --no-cache-dir -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: RENDER
+        value: "true"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    healthCheckPath: /health
+  - type: cron
+    name: instabot-cron
+    runtime: python
+    plan: free
+    region: oregon
+    schedule: "0 */6 * * *"
+    buildCommand: pip install --no-cache-dir -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: RENDER
+        value: "true"
