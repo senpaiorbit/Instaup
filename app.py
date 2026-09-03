@@ -70,12 +70,10 @@ class Handler(BaseHTTPRequestHandler):
                     for k, v in qs.items():
                         if k == "stream":
                             continue
-                        # handle comma-separated and multiple values
                         vals = []
                         for val in v:
-                            # split on comma and also handle @ prefix
                             for part in val.split(","):
-                                part = unquote(part).strip()
+                                part = unquote(part).strip().strip('"').strip("'").strip()
                                 if part:
                                     vals.append(part)
                         query[k] = vals if len(vals) > 1 else (vals[0] if vals else "")

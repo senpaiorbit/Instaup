@@ -77,22 +77,29 @@ def main():
                 # cover alias
                 if "cover" in over and "cover_path" not in over:
                     over["cover_path"] = over.pop("cover")
-                # type coercion for query strings (all come as strings from URL)
+                # type coercion for query strings (all come as strings from URL) - strip quotes
                 for k in list(over.keys()):
                     v = over[k]
                     if isinstance(v, str):
+                        v = v.strip().strip('"').strip("'").strip()
+                        over[k] = v
                         low = v.lower()
                         if low in ("true", "false"):
                             over[k] = low == "true"
                         elif k in ("max_reels_per_run", "max_reels", "min_likes", "min_comments", "min_shares", "min_reposts", "min_views"):
                             try:
-                                over[k] = int(v)
+                                # strip quotes again and handle like '0"' 
+                                clean = v.strip().strip('"').strip("'").strip()
+                                over[k] = int(clean) if clean else 0
                             except Exception:
+                                over[k] = 0
                                 pass
                         elif k in ("delay_min", "delay_max", "max_age_hours"):
                             try:
-                                over[k] = float(v)
+                                clean = v.strip().strip('"').strip("'").strip()
+                                over[k] = float(clean) if clean else 0
                             except Exception:
+                                over[k] = 0
                                 pass
                         elif k == "custom_hashtags":
                             over[k] = [x.strip().lstrip("#") for x in v.split(",") if x.strip()]
