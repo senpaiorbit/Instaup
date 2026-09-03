@@ -23,21 +23,20 @@ def setup_logger(log_file, level="INFO"):
 
     logger = logging.getLogger("instabot")
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
-    if logger.handlers:
-        return logger
-
+    # if already has handlers (e.g. QueueLogHandler from app.py), don't re-add but ensure file handler exists
+    has_file = any(isinstance(h, RotatingFileHandler) for h in logger.handlers)
+    has_stream = any(isinstance(h, logging.StreamHandler) and not isinstance(h, RotatingFileHandler) for h in logger.handlers)
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-
-    fh = RotatingFileHandler(str(p), maxBytes=1 << 20, backupCount=1)
-    fh.setFormatter(fmt)
-    logger.addHandler(fh)
-
-    sh = logging.StreamHandler()
-    if os.environ.get("RENDER"):
-        sh.setLevel(logging.WARNING)
-    sh.setFormatter(fmt)
-    logger.addHandler(sh)
-
+    if not has_file:
+        fh = RotatingFileHandler(str(p), maxBytes=1 << 20, backupCount=1)
+        fh.setFormatter(fmt)
+        logger.addHandler(fh)
+    if not has_stream:
+        sh = logging.StreamHandler()
+        if os.environ.get("RENDER"):
+            sh.setLevel(logging.WARNING)
+        sh.setFormatter(fmt)
+        logger.addHandler(sh)
     return logger
 
 
