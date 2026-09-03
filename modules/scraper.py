@@ -188,6 +188,99 @@ def _fetch_clips_discover(client, amount=6, logger=None):
 def _fetch_explore_reels(client, amount=6, logger=None):
     return _fetch_clips_discover(client, amount=amount, logger=logger)
 
+def _load_accounts(path: str, logger=None) -> list[str]:
+    from pathlib import Path
+    p = Path(path)
+    if not p.is_absolute():
+        p = Path(__file__).resolve().parent.parent / p
+    if not p.exists():
+        if logger:
+            logger.warning(f"accounts file not found: {p}")
+        return []
+    accounts = []
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # strip @ and whitespace, handle @{username} or @username
+        line = line.lstrip("@").strip("{} ").strip()
+        if line:
+            accounts.append(line)
+    if logger:
+        logger.info(f"Loaded {len(accounts)} accounts from {p.name}")
+    return accounts
+
+def _fetch_from_accounts(client, config: dict, logger=None):
+    import random
+    accounts_file = config.get("accounts_file", "accounts.txt")
+    accounts = _load_accounts(accounts_file, logger)
+    if not accounts:
+        if logger:
+            logger.error("No accounts in accounts.txt")
+        return []
+    # shuffle and try each until we get videos
+    random.shuffle(accounts)
+    own_id = str(getattr(client, "user_id", "") or "")
+    for username in accounts[:5]:  # try up to 5 random accounts per run
+        if logger:
+            logger.info(f"Trying account @{username}...")
+        try:
+            user_id = client.user_id_from_username(username)
+        except Exception as e:
+            if logger:
+                logger.warning(f"@{username} lookup failed: {e}")
+            continue
+        if own_id and str(user_id) == own_id:
+            if logger:
+                logger.info(f"Skipping own account @{username}")
+            continue
+        # fetch clips - try user_clips first (most efficient), fallback to user_medias
+        medias = []
+        try:
+            # try clips (reels) endpoint
+            if hasattr(client, "user_clips"):
+                medias = client.user_clips(user_id, amount=12)
+            elif hasattr(client, "user_clips_v1"):
+                medias = client.user_clips_v1(user_id, amount=12)
+            else:
+                medias = client.user_medias(user_id, amount=12)
+        except Exception as e:
+            if logger:
+                logger.warning(f"user_clips failed for @{username}: {e}")
+            try:
+                medias = client.user_medias(user_id, amount=12)
+            except Exception as e2:
+                if logger:
+                    logger.warning(f"user_medias fallback failed @{username}: {e2}")
+                continue
+        # filter videos only and skip own (already) and ads
+        candidates = []
+        for m in medias:
+            # m may be Media object already
+            if isinstance(m, dict):
+                if not _is_video(m):
+                    continue
+                m = _try_normalize(m)
+            if not _is_video(m):
+                continue
+            # skip own
+            try:
+                uid = str(getattr(getattr(m, "user", None), "pk", "") or "")
+                if own_id and uid == own_id:
+                    continue
+            except Exception:
+                pass
+            candidates.append(m)
+        if not candidates:
+            if logger:
+                logger.info(f"@{username} has no clips, trying next")
+            continue
+        random.shuffle(candidates)
+        if logger:
+            logger.info(f"Picked @{username} with {len(candidates)} clips -> selected 1 random")
+        # return 1 random (or up to fetch_count)
+        return candidates[:1]
+    return []
 
 def _filter_item(item, own_id, skipped):
     raw = _extract_media(item)
@@ -221,6 +314,19 @@ def fetch_reels(client, config: dict, logger=None) -> list:
     source = config.get("source", "feed")
     max_reels = config.get("max_reels_per_run", 1)
     fetch_count = max(max_reels * 2, 6)
+
+    if source == "accounts":
+        # pick random account -> random video (same flow after)
+        medias = _fetch_from_accounts(client, config, logger)
+        if logger:
+            logger.info(f"Accounts source gave {len(medias)} videos")
+        # fallback to feed if accounts gave nothing
+        if not medias:
+            if logger:
+                logger.info("Accounts gave 0, falling back to feed")
+            config = {**config, "source": "feed"}
+            return fetch_reels(client, config, logger)
+        return medias[:max_reels]
 
     if source == "feed":
         feed_iter = _fetch_feed_items(client, logger)

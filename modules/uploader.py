@@ -121,13 +121,18 @@ def upload_reel(client, media, config, logger=None):
         if not p.is_absolute():
             p = PROJECT_ROOT / p
         if p.is_dir():
-            candidates = sorted(p.glob("*.jpg")) + sorted(p.glob("*.png")) + sorted(p.glob("*.jpeg"))
+            # support /cover/{n}.jpg|jpeg|png|webp - pick random
+            import random
+            candidates = list(p.glob("*.jpg")) + list(p.glob("*.jpeg")) + list(p.glob("*.png")) + list(p.glob("*.webp")) + list(p.glob("*.JPG")) + list(p.glob("*.JPEG")) + list(p.glob("*.PNG"))
+            # also handle nested like cover/1.jpg, cover/2.png etc
+            candidates = [c for c in candidates if c.is_file()]
             if candidates:
-                p = candidates[0]
+                p = random.choice(candidates)
+        # handle pattern with wildcard like cover/* or cover/{n}
         if p.is_file():
             thumb_arg = str(p)
             if logger:
-                logger.info(f"Using custom cover")
+                logger.info(f"Using custom cover {p.name} (random from {p.parent.name}/)")
     if not thumb_arg:
         if not thumb_path.exists():
             try:
