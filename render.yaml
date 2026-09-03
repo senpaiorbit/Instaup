@@ -5,7 +5,7 @@ services:
     plan: free
     region: oregon
     env: python
-    buildCommand: pip install --prefer-binary --no-cache-dir -r requirements.txt
+    buildCommand: bash build.sh
     startCommand: python app.py
     envVars:
       - key: PYTHON_VERSION
@@ -23,7 +23,7 @@ services:
     plan: free
     region: oregon
     schedule: "0 */6 * * *"
-    buildCommand: pip install --prefer-binary --no-cache-dir -r requirements.txt
+    buildCommand: bash build.sh
     startCommand: python main.py
     envVars:
       - key: PYTHON_VERSION
