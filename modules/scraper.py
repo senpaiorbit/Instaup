@@ -212,12 +212,29 @@ def _load_accounts(path: str, logger=None) -> list[str]:
 
 def _fetch_from_accounts(client, config: dict, logger=None):
     import random
-    accounts_file = config.get("accounts_file", "accounts.txt")
-    accounts = _load_accounts(accounts_file, logger)
+    # support query override: ?account=@a,@b or ?accounts=@a& ?src=accounts (via CONFIG_OVERRIDE)
+    accounts = config.get("accounts")
+    if isinstance(accounts, list) and accounts:
+        # normalize @ prefix and strip
+        normalized = []
+        for a in accounts:
+            a = str(a).strip().lstrip("@").strip("{} ").strip()
+            if a:
+                normalized.append(a)
+        accounts = normalized
+        if logger:
+            logger.info(f"Using query accounts override: {accounts}")
+    else:
+        accounts_file = config.get("accounts_file", "accounts.txt")
+        accounts = _load_accounts(accounts_file, logger)
     if not accounts:
         if logger:
-            logger.error("No accounts in accounts.txt")
+            logger.error("No accounts in accounts.txt and no query accounts")
         return []
+    # log active filters
+    filt = {k: config.get(k) for k in ("min_likes","min_comments","min_shares","min_views","max_age_hours") if config.get(k)}
+    if filt and logger:
+        logger.info(f"Accounts filters active: {filt}")
     # shuffle and try each until we get videos
     random.shuffle(accounts)
     own_id = str(getattr(client, "user_id", "") or "")
@@ -253,17 +270,19 @@ def _fetch_from_accounts(client, config: dict, logger=None):
                 if logger:
                     logger.warning(f"user_medias fallback failed @{username}: {e2}")
                 continue
-        # filter videos only and skip own (already) and ads
+        # filter videos only and skip own/ads + engagement filters
         candidates = []
         for m in medias:
-            # m may be Media object already
             if isinstance(m, dict):
                 if not _is_video(m):
+                    continue
+                if not _passes_filters(m, config, logger):
                     continue
                 m = _try_normalize(m)
             if not _is_video(m):
                 continue
-            # skip own
+            if not _passes_filters(m, config, logger):
+                continue
             try:
                 uid = str(getattr(getattr(m, "user", None), "pk", "") or "")
                 if own_id and uid == own_id:
@@ -273,16 +292,82 @@ def _fetch_from_accounts(client, config: dict, logger=None):
             candidates.append(m)
         if not candidates:
             if logger:
-                logger.info(f"@{username} has no clips, trying next")
+                logger.info(f"@{username} has no clips passing filters, trying next")
             continue
         random.shuffle(candidates)
         if logger:
-            logger.info(f"Picked @{username} with {len(candidates)} clips -> selected 1 random")
-        # return 1 random (or up to fetch_count)
+            logger.info(f"Picked @{username} with {len(candidates)} clips (filtered) -> selected 1 random")
         return candidates[:1]
     return []
 
-def _filter_item(item, own_id, skipped):
+def _passes_filters(media, config, logger=None):
+    # config filters: min_likes, min_comments, min_shares, min_views, max_age_hours
+    # supports both dict and Media object
+    def get_val(obj, keys, default=0):
+        for k in keys:
+            if isinstance(obj, dict):
+                v = obj.get(k)
+            else:
+                v = getattr(obj, k, None)
+            if v is not None:
+                try:
+                    return int(v)
+                except Exception:
+                    return v
+        return default
+    def get_taken_at(obj):
+        if isinstance(obj, dict):
+            return obj.get("taken_at") or obj.get("taken_at_utc") or obj.get("created_at")
+        return getattr(obj, "taken_at", None) or getattr(obj, "taken_at_utc", None)
+
+    min_likes = int(config.get("min_likes", 0) or 0)
+    if min_likes:
+        likes = get_val(media, ["like_count", "likes"], 0)
+        if likes < min_likes:
+            if logger:
+                logger.debug(f"Filter skip likes {likes} < {min_likes}")
+            return False
+    min_comments = int(config.get("min_comments", 0) or 0)
+    if min_comments:
+        comments = get_val(media, ["comment_count", "comments", "commenting_count"], 0)
+        # fallback: preview_comments length
+        if not comments and isinstance(media, dict):
+            comments = len(media.get("preview_comments") or [])
+        if comments < min_comments:
+            if logger:
+                logger.debug(f"Filter skip comments {comments} < {min_comments}")
+            return False
+    min_shares = int(config.get("min_shares", config.get("min_reposts", 0)) or 0)
+    if min_shares:
+        shares = get_val(media, ["reshare_count", "share_count", "reposts", "shares"], 0)
+        if shares < min_shares:
+            if logger:
+                logger.debug(f"Filter skip shares {shares} < {min_shares}")
+            return False
+    min_views = int(config.get("min_views", 0) or 0)
+    if min_views:
+        views = get_val(media, ["play_count", "view_count", "views", "video_view_count"], 0)
+        if views < min_views:
+            if logger:
+                logger.debug(f"Filter skip views {views} < {min_views}")
+            return False
+    max_age = config.get("max_age_hours")
+    if max_age:
+        try:
+            max_age = float(max_age)
+            taken = get_taken_at(media)
+            if taken:
+                import time
+                age_h = (time.time() - float(taken)) / 3600
+                if age_h > max_age:
+                    if logger:
+                        logger.debug(f"Filter skip age {age_h:.1f}h > {max_age}h")
+                    return False
+        except Exception:
+            pass
+    return True
+
+def _filter_item(item, own_id, skipped, config=None, logger=None):
     raw = _extract_media(item)
     if not raw:
         return None
@@ -298,6 +383,10 @@ def _filter_item(item, own_id, skipped):
                 return None
         except Exception:
             pass
+    # engagement filters on raw dict before normalize (cheaper)
+    if config and not _passes_filters(raw, config, logger):
+        skipped["filtered"] = skipped.get("filtered", 0) + 1
+        return None
     media = _try_normalize(raw)
     try:
         u = getattr(media, "user", None)
@@ -307,6 +396,10 @@ def _filter_item(item, own_id, skipped):
             return None
     except Exception:
         pass
+    # also check normalized Media (has proper like_count etc)
+    if config and not _passes_filters(media, config, logger):
+        skipped["filtered"] = skipped.get("filtered", 0) + 1
+        return None
     return media
 
 
@@ -331,21 +424,21 @@ def fetch_reels(client, config: dict, logger=None) -> list:
     if source == "feed":
         feed_iter = _fetch_feed_items(client, logger)
         videos = []
-        skipped = {"ads": 0, "own": 0}
+        skipped = {"ads": 0, "own": 0, "filtered": 0}
         for item in feed_iter:
-            media = _filter_item(item, str(getattr(client, "user_id", "") or ""), skipped)
+            media = _filter_item(item, str(getattr(client, "user_id", "") or ""), skipped, config, logger)
             if media:
                 videos.append(media)
                 if len(videos) >= fetch_count:
                     break
         if logger:
-            logger.info(f"Filtered {len(videos)} videos from '{source}' (skipped {skipped['ads']} ads, {skipped['own']} own)")
+            logger.info(f"Filtered {len(videos)} videos from '{source}' (skipped {skipped['ads']} ads, {skipped['own']} own, {skipped.get('filtered',0)} filtered)")
         if not videos:
             if logger:
                 logger.info("Feed had 0 organic videos, trying reels tray fallback...")
             fb_items = _fetch_reels_tray(client, logger)
             for item in fb_items:
-                media = _filter_item(item, str(getattr(client, "user_id", "") or ""), skipped)
+                media = _filter_item(item, str(getattr(client, "user_id", "") or ""), skipped, config, logger)
                 if media:
                     videos.append(media)
                     if len(videos) >= fetch_count:
@@ -357,7 +450,7 @@ def fetch_reels(client, config: dict, logger=None) -> list:
                     logger.info("Trying explore_reels fallback...")
                 ex_items = _fetch_explore_reels(client, amount=6, logger=logger)
                 for item in ex_items:
-                    media = _filter_item(item, str(getattr(client, "user_id", "") or ""), skipped)
+                    media = _filter_item(item, str(getattr(client, "user_id", "") or ""), skipped, config, logger)
                     if media:
                         videos.append(media)
                         if len(videos) >= max_reels:
@@ -371,15 +464,15 @@ def fetch_reels(client, config: dict, logger=None) -> list:
             return []
         own_id = str(getattr(client, "user_id", "") or "")
         videos = []
-        skipped = {"ads": 0, "own": 0}
+        skipped = {"ads": 0, "own": 0, "filtered": 0}
         for item in items:
-            media = _filter_item(item, own_id, skipped)
+            media = _filter_item(item, own_id, skipped, config, logger)
             if media:
                 videos.append(media)
                 if len(videos) >= fetch_count:
                     break
         if logger:
-            logger.info(f"Filtered {len(videos)} videos from '{source}' (skipped {skipped['ads']} ads, {skipped['own']} own)")
+            logger.info(f"Filtered {len(videos)} videos from '{source}' (skipped {skipped['ads']} ads, {skipped['own']} own, {skipped.get('filtered',0)} filtered)")
     elif source in ("reels", "reels_tray", "explore_reels"):
         if source in ("reels", "reels_tray"):
             items = _fetch_reels_tray(client, logger)
@@ -387,15 +480,15 @@ def fetch_reels(client, config: dict, logger=None) -> list:
             items = _fetch_explore_reels(client, amount=6, logger=logger)
         own_id = str(getattr(client, "user_id", "") or "")
         videos = []
-        skipped = {"ads": 0, "own": 0}
+        skipped = {"ads": 0, "own": 0, "filtered": 0}
         for item in items:
-            media = _filter_item(item, own_id, skipped)
+            media = _filter_item(item, own_id, skipped, config, logger)
             if media:
                 videos.append(media)
                 if len(videos) >= fetch_count:
                     break
         if logger:
-            logger.info(f"Filtered {len(videos)} videos from '{source}' (skipped {skipped['ads']} ads, {skipped['own']} own)")
+            logger.info(f"Filtered {len(videos)} videos from '{source}' (skipped {skipped['ads']} ads, {skipped['own']} own, {skipped.get('filtered',0)} filtered)")
     else:
         if logger:
             logger.warning(f"Unknown source '{source}', falling back to feed")
