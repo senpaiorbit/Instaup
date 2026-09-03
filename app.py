@@ -184,16 +184,23 @@ def _run_job():
     global _running
     _running = True
     BroadcastHandler.emit("=== Upload job started ===")
+    BroadcastHandler.emit(f"Config: {PROJECT_ROOT / 'config.json'}")
     os.environ["FROM_APP"] = "1"
     try:
+        BroadcastHandler.emit("Loading config and session...")
         from main import main
         import sys
         sys.argv = ["main.py"]
-        main()
+        BroadcastHandler.emit("Calling main() - fetching feed...")
+        ret = main()
+        BroadcastHandler.emit(f"main() returned {ret}")
         BroadcastHandler.emit("=== Upload job finished ===")
     except Exception as e:
+        import traceback
         BroadcastHandler.emit(f"Job error: {e}")
+        BroadcastHandler.emit(traceback.format_exc())
         print(f"Job error: {e}")
+        traceback.print_exc()
     finally:
         _running = False
         os.environ.pop("FROM_APP", None)
