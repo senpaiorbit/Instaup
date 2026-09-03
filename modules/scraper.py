@@ -407,6 +407,8 @@ def fetch_reels(client, config: dict, logger=None) -> list:
     source = config.get("source", "feed")
     max_reels = config.get("max_reels_per_run", 1)
     fetch_count = max(max_reels * 2, 6)
+    # helper to try until found (for strict filters)
+    has_filters = any(config.get(k) for k in ("min_likes","min_comments","min_shares","min_views","max_age_hours"))
 
     if source == "accounts":
         # pick random account -> random video (same flow after)
@@ -494,4 +496,46 @@ def fetch_reels(client, config: dict, logger=None) -> list:
             logger.warning(f"Unknown source '{source}', falling back to feed")
         return fetch_reels(client, {**config, "source": "feed"}, logger)
 
+    # fallback until found: if strict filters gave 0, keep searching with larger fetch
+    if not videos and has_filters:
+        if logger:
+            logger.info(f"No reels passed filters { {k:config.get(k) for k in ('min_likes','min_comments','min_shares','min_views','max_age_hours') if config.get(k)} } -> retrying with larger scan...")
+        # try more pages / more clips (up to 3 retries)
+        for attempt in range(2):
+            more = []
+            if source == "feed":
+                # try more feed pages (5) and more clips
+                for item in _fetch_feed_items(client, logger, max_pages=5):
+                    m = _filter_item(item, str(getattr(client, "user_id", "") or ""), {"ads":0,"own":0,"filtered":0}, config, logger)
+                    if m:
+                        more.append(m)
+                        if len(more) >= max_reels:
+                            break
+                if not more:
+                    # try bigger clips discover
+                    ex = _fetch_clips_discover(client, amount=20, logger=logger)
+                    for it in ex:
+                        m = _filter_item(it, str(getattr(client, "user_id", "") or ""), {"ads":0,"own":0,"filtered":0}, config, logger)
+                        if m:
+                            more.append(m)
+                            if len(more) >= max_reels:
+                                break
+            elif source == "accounts":
+                # try next random accounts (already tries 5, try again)
+                more = _fetch_from_accounts(client, config, logger)
+            else:
+                more = _fetch_clips_discover(client, amount=20, logger=logger)
+                # filter them
+                tmp = []
+                for it in more:
+                    m = _filter_item(it, str(getattr(client, "user_id", "") or ""), {"ads":0,"own":0,"filtered":0}, config, logger)
+                    if m:
+                        tmp.append(m)
+                more = tmp
+            if more:
+                if logger:
+                    logger.info(f"Retry {attempt+1} found {len(more)} filtered reels")
+                return more[:max_reels]
+            if logger:
+                logger.info(f"Retry {attempt+1} still 0, trying again...")
     return videos[:max_reels]
