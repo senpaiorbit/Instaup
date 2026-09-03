@@ -5,14 +5,16 @@ services:
     plan: free
     region: oregon
     env: python
-    buildCommand: pip install --no-cache-dir -r requirements.txt
+    buildCommand: pip install --prefer-binary --no-cache-dir -r requirements.txt
     startCommand: python app.py
     envVars:
       - key: PYTHON_VERSION
-        value: "3.11.0"
+        value: "3.11.11"
       - key: RENDER
         value: "true"
       - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PIP_PREFER_BINARY
         value: "1"
     healthCheckPath: /health
   - type: cron
@@ -21,10 +23,12 @@ services:
     plan: free
     region: oregon
     schedule: "0 */6 * * *"
-    buildCommand: pip install --no-cache-dir -r requirements.txt
+    buildCommand: pip install --prefer-binary --no-cache-dir -r requirements.txt
     startCommand: python main.py
     envVars:
       - key: PYTHON_VERSION
-        value: "3.11.0"
+        value: "3.11.11"
       - key: RENDER
         value: "true"
+      - key: PIP_PREFER_BINARY
+        value: "1"
