@@ -101,7 +101,7 @@ def _extract_media(item):
     return None
 
 
-def _fetch_feed_items(client, logger=None, max_pages=2):
+def _fetch_feed_items(client, logger=None, max_pages=3):
     next_max_id = None
     seen_posts = None
     for page in range(max_pages):
@@ -296,8 +296,9 @@ def _fetch_from_accounts(client, config: dict, logger=None):
             continue
         random.shuffle(candidates)
         if logger:
-            logger.info(f"Picked @{username} with {len(candidates)} clips (filtered) -> selected 1 random")
-        return candidates[:1]
+            logger.info(f"Picked @{username} with {len(candidates)} clips (filtered) -> returning {min(len(candidates), 6)}")
+        # return up to 6 shuffled so dedup can find new (was 1, caused All duplicates)
+        return candidates[:6]
     return []
 
 def _passes_filters(media, config, logger=None):
@@ -411,17 +412,15 @@ def fetch_reels(client, config: dict, logger=None) -> list:
     has_filters = any(config.get(k) for k in ("min_likes","min_comments","min_shares","min_views","max_age_hours"))
 
     if source == "accounts":
-        # pick random account -> random video (same flow after)
         medias = _fetch_from_accounts(client, config, logger)
         if logger:
             logger.info(f"Accounts source gave {len(medias)} videos")
-        # fallback to feed if accounts gave nothing
         if not medias:
             if logger:
                 logger.info("Accounts gave 0, falling back to feed")
             config = {**config, "source": "feed"}
             return fetch_reels(client, config, logger)
-        return medias[:max_reels]
+        return medias  # return all, dedup in main will pick new
 
     if source == "feed":
         feed_iter = _fetch_feed_items(client, logger)
@@ -496,6 +495,11 @@ def fetch_reels(client, config: dict, logger=None) -> list:
             logger.warning(f"Unknown source '{source}', falling back to feed")
         return fetch_reels(client, {**config, "source": "feed"}, logger)
 
+    # shuffle so feed's different reels get chance (not just first in order) - fixes same reel repeat
+    if videos:
+        import random as _rnd
+        _rnd.shuffle(videos)
+    # return all filtered (not just max_reels) so dedup can find new among them
     # fallback until found: if strict filters gave 0, keep searching with larger fetch
     if not videos and has_filters:
         if logger:
@@ -535,7 +539,7 @@ def fetch_reels(client, config: dict, logger=None) -> list:
             if more:
                 if logger:
                     logger.info(f"Retry {attempt+1} found {len(more)} filtered reels")
-                return more[:max_reels]
+                return more
             if logger:
                 logger.info(f"Retry {attempt+1} still 0, trying again...")
-    return videos[:max_reels]
+    return videos  # let main handle max_reels after dedup
