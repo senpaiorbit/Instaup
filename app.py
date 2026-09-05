@@ -78,32 +78,41 @@ class Handler(BaseHTTPRequestHandler):
                         BroadcastHandler.emit(f"Query override: {query}")
                 except Exception as e:
                     BroadcastHandler.emit(f"Query parse error: {e}")
-            # check for stream
+            # if job already running, show status and not start new (avoid double upload same reel)
+            with _log_lock:
+                is_running = _running
+            if is_running:
+                # if query has new src, inform user to wait
+                if query and "src" in query:
+                    self.send_response(429)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.end_headers()
+                    html = f"""<!doctype html><html><body style="font-family:monospace;background:#111;color:#0f0;padding:20px"><h2>Already running</h2><p>Current job with src={query.get('src')} queued? Wait 90s and retry.</p><p><a href="/logs/stream" style="color:#0ff">watch live log</a></p><script>setTimeout(()=>location.href='/upload?src={query.get('src','feed')}', 90000), 90000)</script></body></html>""".encode()
+                    self.wfile.write(html)
+                    return
+                # for stream requests, just stream logs even if running
+                if "stream=1" in self.path or "text/event-stream" in self.headers.get("Accept", ""):
+                    self._stream_logs()
+                    return
+                self.send_response(429)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"already running - wait 90s and retry /upload?src=feed")
+                return
+            # not running - start new job with query
+            with _log_lock:
+                _running = True
             if "stream=1" in self.path or "text/event-stream" in self.headers.get("Accept", ""):
-                should_start = False
-                with _log_lock:
-                    if not _running:
-                        _running = True
-                        should_start = True
-                if should_start:
-                    threading.Thread(target=_run_job, args=(query,), daemon=True).start()
-                    time.sleep(0.5)
+                threading.Thread(target=_run_job, args=(query,), daemon=True).start()
+                time.sleep(0.5)
                 self._stream_logs()
                 return
-            # normal HTML
-            should_start = False
-            with _log_lock:
-                if not _running:
-                    _running = True
-                    should_start = True
-            if should_start:
-                threading.Thread(target=_run_job, args=(query,), daemon=True).start()
-            if should_start or _running:
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Cache-Control", "no-cache")
-                self.end_headers()
-                html = b"""<!doctype html><html><head><meta charset="utf-8"><title>InstaUp Live</title>
+            threading.Thread(target=_run_job, args=(query,), daemon=True).start()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            html = b"""<!doctype html><html><head><meta charset="utf-8"><title>InstaUp Live</title>
 <style>body{font-family:monospace;background:#0f0f0f;color:#0f0;padding:16px}pre{white-space:pre-wrap;word-break:break-all}#log{border:1px solid #333;padding:12px;height:70vh;overflow:auto;background:#000}</style></head>
 <body><h2>InstaUp - Live log</h2><pre id="log">Connecting...</pre><script>
 const log=document.getElementById('log');
@@ -112,12 +121,7 @@ const es=new EventSource('/logs/stream');
 es.onmessage=e=>{log.textContent+=e.data+"\\n";log.scrollTop=log.scrollHeight};
 es.onerror=()=>{es.close()};
 </script><p><a href="/logs" style="color:#0ff">raw logs</a> | <a href="/health" style="color:#0ff">health</a> | <a href="/upload?stream=1">plain stream</a></p></body></html>"""
-                self.wfile.write(html)
-                return
-            self.send_response(429)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"already running")
+            self.wfile.write(html)
             return
 
         if self.path == "/logs":

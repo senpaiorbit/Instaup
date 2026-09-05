@@ -1,5 +1,5 @@
 {
-    "source": "accounts",
+    "source": "feed",
     "accounts_file": "accounts.txt",
     "max_reels_per_run": 1,
     "delay_min": 5,
