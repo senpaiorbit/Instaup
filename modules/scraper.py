@@ -496,9 +496,12 @@ def fetch_reels(client, config: dict, logger=None) -> list:
         return fetch_reels(client, {**config, "source": "feed"}, logger)
 
     # shuffle so feed's different reels get chance (not just first in order) - fixes same reel repeat
+    # also ensure we have more candidates than max_reels so dedup can find new
     if videos:
         import random as _rnd
         _rnd.shuffle(videos)
+        # keep all filtered for dedup to choose from, not just fetch_count
+        # dedup in main will pick first new after shuffle
     # return all filtered (not just max_reels) so dedup can find new among them
     # fallback until found: if strict filters gave 0, keep searching with larger fetch
     if not videos and has_filters:
