@@ -59,14 +59,11 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"ok")
             return
 
-        # /upload and /run - support ?stream=1 for raw SSE and custom query overrides
         if self.path == "/upload" or self.path == "/run" or self.path.startswith("/upload?") or self.path.startswith("/run?"):
-            # parse query overrides for custom run without recommit: ?src=accounts&account=@a,@b&cover=cover/2.jpg etc
             query = {}
             if "?" in self.path:
                 try:
                     qs = parse_qs(urlparse(self.path).query)
-                    # flatten: take first value, keep list for account
                     for k, v in qs.items():
                         if k == "stream":
                             continue
@@ -77,30 +74,36 @@ class Handler(BaseHTTPRequestHandler):
                                 if part:
                                     vals.append(part)
                         query[k] = vals if len(vals) > 1 else (vals[0] if vals else "")
-                    # special: account param may be like ?account=@xyz&account=@abcd or ?account=@xyz,@abcd or ?account=@xyz@{abcd} (legacy)
-                    if "account" in query:
-                        # already handled
-                        pass
-                    # also support ?src=reels, ?src=accounts, ?src=feed
-                    # also support ?cover=cover/2.jpg, ?caption_mode=custom etc
                     if query:
                         BroadcastHandler.emit(f"Query override: {query}")
                 except Exception as e:
                     BroadcastHandler.emit(f"Query parse error: {e}")
+            # check for stream
             if "stream=1" in self.path or "text/event-stream" in self.headers.get("Accept", ""):
-                if not _running:
+                should_start = False
+                with _log_lock:
+                    if not _running:
+                        _running = True
+                        should_start = True
+                if should_start:
                     threading.Thread(target=_run_job, args=(query,), daemon=True).start()
                     time.sleep(0.5)
                 self._stream_logs()
                 return
-            # browser HTML with live EventSource
-            if not _running:
+            # normal HTML
+            should_start = False
+            with _log_lock:
+                if not _running:
+                    _running = True
+                    should_start = True
+            if should_start:
                 threading.Thread(target=_run_job, args=(query,), daemon=True).start()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-            html = b"""<!doctype html><html><head><meta charset="utf-8"><title>InstaUp Live</title>
+            if should_start or _running:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                html = b"""<!doctype html><html><head><meta charset="utf-8"><title>InstaUp Live</title>
 <style>body{font-family:monospace;background:#0f0f0f;color:#0f0;padding:16px}pre{white-space:pre-wrap;word-break:break-all}#log{border:1px solid #333;padding:12px;height:70vh;overflow:auto;background:#000}</style></head>
 <body><h2>InstaUp - Live log</h2><pre id="log">Connecting...</pre><script>
 const log=document.getElementById('log');
@@ -109,7 +112,12 @@ const es=new EventSource('/logs/stream');
 es.onmessage=e=>{log.textContent+=e.data+"\\n";log.scrollTop=log.scrollHeight};
 es.onerror=()=>{es.close()};
 </script><p><a href="/logs" style="color:#0ff">raw logs</a> | <a href="/health" style="color:#0ff">health</a> | <a href="/upload?stream=1">plain stream</a></p></body></html>"""
-            self.wfile.write(html)
+                self.wfile.write(html)
+                return
+            self.send_response(429)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"already running")
             return
 
         if self.path == "/logs":
@@ -190,7 +198,6 @@ es.onerror=()=>{es.close()};
 
     def do_POST(self):
         global _running
-        # parse query for POST as well
         query = {}
         if "?" in self.path:
             try:
@@ -201,7 +208,7 @@ es.onerror=()=>{es.close()};
                     vals = []
                     for val in v:
                         for part in val.split(","):
-                            part = unquote(part).strip()
+                            part = unquote(part).strip().strip('"').strip("'").strip()
                             if part:
                                 vals.append(part)
                     query[k] = vals if len(vals) > 1 else (vals[0] if vals else "")
@@ -209,7 +216,12 @@ es.onerror=()=>{es.close()};
                 pass
         if self.path in ("/upload", "/run") or self.path.startswith("/upload?") or self.path.startswith("/run?"):
             if "stream=1" in self.path:
-                if not _running:
+                should_start = False
+                with _log_lock:
+                    if not _running:
+                        _running = True
+                        should_start = True
+                if should_start:
                     threading.Thread(target=_run_job, args=(query,), daemon=True).start()
                     time.sleep(0.5)
                 self._stream_logs()
@@ -227,9 +239,9 @@ es.onerror=()=>{es.close()};
 
 def _run_job(query: dict | None = None):
     global _running
+    # _running already set in handler, but ensure
     _running = True
     if query:
-        BroadcastHandler.emit(f"Query override: {query}")
         try:
             os.environ["CONFIG_OVERRIDE"] = json.dumps(query)
         except Exception:
@@ -255,6 +267,7 @@ def _run_job(query: dict | None = None):
     finally:
         _running = False
         os.environ.pop("FROM_APP", None)
+        os.environ.pop("CONFIG_OVERRIDE", None)
 
 if __name__ == "__main__":
     print(f"InstaUp listening on 0.0.0.0:{PORT}  /health  /upload  /logs  /logs/stream")
