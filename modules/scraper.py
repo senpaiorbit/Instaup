@@ -382,6 +382,11 @@ def _filter_item(item, own_id, skipped, config=None, logger=None):
             if user_pk and user_pk == own_id:
                 skipped["own"] += 1
                 return None
+            # also check media id contains own_id (format {pk}_{user_id})
+            mid = str(raw.get("id") or raw.get("pk") or "")
+            if own_id in mid:
+                skipped["own"] += 1
+                return None
         except Exception:
             pass
     # engagement filters on raw dict before normalize (cheaper)
@@ -393,6 +398,11 @@ def _filter_item(item, own_id, skipped, config=None, logger=None):
         u = getattr(media, "user", None)
         uid = str(getattr(u, "pk", "") or "") if u else ""
         if own_id and uid and uid == own_id:
+            skipped["own"] += 1
+            return None
+        # also check media id
+        mid = str(getattr(media, "id", "") or getattr(media, "pk", "") or "")
+        if own_id and own_id in mid:
             skipped["own"] += 1
             return None
     except Exception:
