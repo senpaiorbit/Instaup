@@ -149,8 +149,21 @@ def main():
     if dedup_enabled:
         new = filter_new(medias, str(dedup_path), logger)
         if not new:
-            logger.info("All reels are duplicates; nothing to upload")
-            return 0
+            logger.info("All reels are duplicates; nothing to upload - trying fallback for new reel (instagram is infinite)...")
+            # try up to 3 more fetches (random account / next page) until we find new
+            for attempt in range(3):
+                more = fetch_reels(client, config, logger)
+                if not more:
+                    continue
+                new = filter_new(more, str(dedup_path), logger)
+                if new:
+                    medias = more
+                    logger.info(f"Fallback attempt {attempt+1} found {len(new)} new")
+                    break
+                logger.info(f"Fallback {attempt+1} still all duplicates, retrying...")
+            if not new:
+                logger.info("All reels are duplicates after retries; nothing to upload")
+                return 0
     else:
         logger.info("Dedup disabled (enable_dedup=false) - skipping duplicate check")
         new = medias

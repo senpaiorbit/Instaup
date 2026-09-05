@@ -1,2 +1,8 @@
-@rynox.repost
-@bingokid67
+# One username per line, with or without @
+# Bot picks random account each run, then random video from that account
+@instagram
+@natgeo
+@nike
+# add your niche accounts below
+# @your_target_account1
+# @your_target_account2
