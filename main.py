@@ -150,19 +150,34 @@ def main():
         new = filter_new(medias, str(dedup_path), logger)
         if not new:
             logger.info("All reels are duplicates; nothing to upload - trying fallback for new reel (instagram is infinite)...")
-            # try up to 3 more fetches (random account / next page) until we find new
-            for attempt in range(3):
-                more = fetch_reels(client, config, logger)
+            # try up to 5 more fetches with larger scan and different random seed
+            import time, random as _rnd
+            for attempt in range(5):
+                # add small delay and randomize to get different feed page
+                time.sleep(1 + _rnd.random() * 2)
+                # for feed, force larger fetch by temporarily increasing fetch_count via config
+                tmp_config = dict(config)
+                # on retry, try alternative source if feed keeps giving same
+                if attempt == 2 and config.get("source") == "feed":
+                    tmp_config["source"] = "reels"
+                    logger.info(f"Fallback {attempt+1}: trying reels source instead of feed")
+                elif attempt == 3:
+                    tmp_config["source"] = "accounts"
+                    logger.info(f"Fallback {attempt+1}: trying accounts source")
+                more = fetch_reels(client, tmp_config, logger)
                 if not more:
                     continue
+                # shuffle more to get different order
+                import random
+                random.shuffle(more)
                 new = filter_new(more, str(dedup_path), logger)
                 if new:
                     medias = more
                     logger.info(f"Fallback attempt {attempt+1} found {len(new)} new")
                     break
-                logger.info(f"Fallback {attempt+1} still all duplicates, retrying...")
+                logger.info(f"Fallback {attempt+1} still all duplicates ({len(more)} checked), retrying...")
             if not new:
-                logger.info("All reels are duplicates after retries; nothing to upload")
+                logger.info("All reels are duplicates after retries; nothing to upload (try different source or clear dedup)")
                 return 0
     else:
         logger.info("Dedup disabled (enable_dedup=false) - skipping duplicate check")
